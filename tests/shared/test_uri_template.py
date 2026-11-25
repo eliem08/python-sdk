@@ -1001,3 +1001,37 @@ def test_match_never_raises() -> None:
     # Floor the call count so the property can never go vacuous: a future
     # change that rejects every generated template would otherwise pass silently.
     assert calls >= 4000
+
+
+@pytest.mark.parametrize(
+    ("template", "uri", "expected"),
+    [
+        ("file://{name}", "file://caf%E9", {"name": "caf\udce9"}),
+        ("file://{+path}", "file://caf%E9", {"path": "caf\udce9"}),
+        ("x{#frag}", "x#caf%E9", {"frag": "caf\udce9"}),
+        ("x{.ext}", "x.caf%E9", {"ext": "caf\udce9"}),
+        ("x{/seg}", "x/caf%E9", {"seg": "caf\udce9"}),
+        ("x{;p}", "x;p=caf%E9", {"p": "caf\udce9"}),
+        ("x{?q}", "x?q=caf%E9", {"q": "caf\udce9"}),
+        ("x{/list*}", "x/a/caf%E9", {"list": ["a", "caf\udce9"]}),
+    ],
+)
+def test_match_preserves_non_utf8_percent_escapes(
+    template: str, uri: str, expected: dict[str, str | list[str]]
+) -> None:
+    # Regression for issue #3721: RFC 3986 percent-encoding encodes octets,
+    # not UTF-8 text, so a latin-1 `caf%E9` must not silently become `caf\uFFFD`.
+    # Undecodable octets are preserved via surrogateescape so the handler can
+    # recover the original bytes and expand() round-trips to the same URI.
+    t = UriTemplate.parse(template)
+    got = t.match(uri)
+    assert got == expected
+    assert "\ufffd" not in str(got)
+    assert t.expand(got) == uri
+
+
+def test_match_valid_utf8_percent_escapes_still_decode() -> None:
+    # The surrogateescape change must not alter the normal UTF-8 path.
+    t = UriTemplate.parse("file://{name}")
+    assert t.match("file://caf%C3%A9") == {"name": "café"}
+    assert t.expand({"name": "café"}) == "file://caf%C3%A9"
